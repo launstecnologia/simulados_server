@@ -42,6 +42,145 @@ def load_json(path):
     return data if isinstance(data, list) else data.get("questoes", [])
 
 
+def contains_text(value, needle):
+    if value is None:
+        return False
+    return needle in str(value).lower()
+
+
+def question_matches(q, filters):
+    qid = (filters.get("id") or "").strip().lower()
+    if qid and str(q.get("id", "")).strip().lower() != qid:
+        return False
+
+    materia = (filters.get("materia") or "").strip().lower()
+    if materia and str(q.get("materia", "")).strip().lower() != materia:
+        return False
+
+    dificuldade = (filters.get("dificuldade") or "").strip().lower()
+    if dificuldade and str(q.get("dificuldade", "")).strip().lower() != dificuldade:
+        return False
+
+    ano = (filters.get("ano") or "").strip().lower()
+    if ano and str((q.get("origem") or {}).get("ano", "")).strip().lower() != ano:
+        return False
+
+    origem_titulo = (filters.get("origem_titulo") or "").strip().lower()
+    if origem_titulo and not contains_text((q.get("origem") or {}).get("titulo", ""), origem_titulo):
+        return False
+
+    tag = (filters.get("tag") or "").strip().lower()
+    if tag:
+        tags = [str(t).lower() for t in (q.get("tags") or [])]
+        if not any(tag in t for t in tags):
+            return False
+
+    topico = (filters.get("topico") or "").strip().lower()
+    if topico:
+        topicos = [str(t).lower() for t in (q.get("topicos") or [])]
+        if not any(topico in t for t in topicos):
+            return False
+
+    q_text = (filters.get("q") or "").strip().lower()
+    if q_text:
+        searchable = [
+            q.get("id"),
+            q.get("tipo"),
+            q.get("materia"),
+            q.get("dificuldade"),
+            q.get("enunciado_html"),
+            q.get("resolucao_html"),
+            q.get("gabarito"),
+            (q.get("origem") or {}).get("raw"),
+            (q.get("origem") or {}).get("titulo"),
+            (q.get("origem") or {}).get("numero"),
+            " ".join([str(t) for t in (q.get("tags") or [])]),
+            " ".join([str(t) for t in (q.get("topicos") or [])]),
+        ]
+        if not any(contains_text(v, q_text) for v in searchable):
+            return False
+
+    return True
+
+
+def apply_filters(items, query):
+    materia = unquote((query.get("materia") or [""])[0]).strip()
+    tipo = (query.get("tipo") or [""])[0].strip().lower()
+    search_q = unquote((query.get("q") or [""])[0]).strip()
+    filtro_id = unquote((query.get("id") or [""])[0]).strip()
+    dificuldade = unquote((query.get("dificuldade") or [""])[0]).strip()
+    tag = unquote((query.get("tag") or [""])[0]).strip()
+    topico = unquote((query.get("topico") or [""])[0]).strip()
+    ano = unquote((query.get("ano") or [""])[0]).strip()
+    origem_titulo = unquote((query.get("origem_titulo") or [""])[0]).strip()
+
+    if tipo in {"alternativas", "aberta", "erro"}:
+        items = [q for q in items if classify_question(q) == tipo]
+
+    filters = {
+        "q": search_q,
+        "id": filtro_id,
+        "materia": materia,
+        "dificuldade": dificuldade,
+        "tag": tag,
+        "topico": topico,
+        "ano": ano,
+        "origem_titulo": origem_titulo,
+    }
+    if any(v for v in filters.values()):
+        items = [q for q in items if question_matches(q, filters)]
+    return items
+
+
+def build_facets(items):
+    materias = Counter()
+    anos = Counter()
+    origens = Counter()
+    dificuldades = Counter()
+    tipos = Counter()
+    topicos = Counter()
+    tags = Counter()
+
+    for q in items:
+        materia = str(q.get("materia", "")).strip()
+        if materia:
+            materias[materia] += 1
+        origem = q.get("origem") or {}
+        ano = str(origem.get("ano", "")).strip()
+        if ano:
+            anos[ano] += 1
+        titulo = str(origem.get("titulo", "")).strip()
+        if titulo:
+            origens[titulo] += 1
+        dificuldade = str(q.get("dificuldade", "")).strip()
+        if dificuldade:
+            dificuldades[dificuldade] += 1
+        tipo = str(q.get("tipo", "")).strip()
+        if tipo:
+            tipos[tipo] += 1
+        for t in (q.get("topicos") or []):
+            tt = str(t).strip()
+            if tt:
+                topicos[tt] += 1
+        for tg in (q.get("tags") or []):
+            tg = str(tg).strip()
+            if tg:
+                tags[tg] += 1
+
+    def to_list(counter):
+        return [{"valor": k, "total": v} for k, v in counter.most_common()]
+
+    return {
+        "materias": to_list(materias),
+        "anos": to_list(anos),
+        "origens_titulo": to_list(origens),
+        "dificuldades": to_list(dificuldades),
+        "tipos": to_list(tipos),
+        "topicos": to_list(topicos),
+        "tags": to_list(tags),
+    }
+
+
 def stats_for_list(items):
     stats = {"total": len(items), "alternativas": 0, "abertas": 0, "erro": 0}
     for q in items:
@@ -118,9 +257,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                         totals[k] += stats[k]
                 return json_response(self, {"totais": totals, "materias": rows})
 
+            if path == "/api/facets":
+                items = load_json(QUESTOES_FILE)
+                filtered = apply_filters(items, query)
+                return json_response(
+                    self,
+                    {
+                        "total_filtrado": len(filtered),
+                        "facets": build_facets(filtered),
+                    },
+                )
+
             if path == "/api/questoes":
                 materia = unquote((query.get("materia") or [""])[0]).strip()
-                tipo = (query.get("tipo") or [""])[0].strip().lower()
                 limit = int((query.get("limit") or ["50"])[0])
                 offset = int((query.get("offset") or ["0"])[0])
                 if limit < 1:
@@ -138,8 +287,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 else:
                     items = load_json(QUESTOES_FILE)
 
-                if tipo in {"alternativas", "aberta", "erro"}:
-                    items = [q for q in items if classify_question(q) == tipo]
+                items = apply_filters(items, query)
 
                 total = len(items)
                 page = items[offset : offset + limit]
