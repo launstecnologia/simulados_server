@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "Bash(python scraper.py)",
+      "Bash(python3 scraper.py)",
+      "Bash(python3 -c ':*)",
+      "Bash(cat)",
+      "Bash(python3 debug_card.py)",
+      "Bash(rm -f questoes_extraidas.json card_dissertativa_debug.html)",
+      "Bash(kill %1)",
+      "Bash(cat card_dissertativa_debug.html)",
+      "Bash(python3 debug_questao.py)",
+      "Bash(awk '{print $2}')",
+      "Bash(ls \"/Users/lucasmoraes/Projects/Robo Simulados/debug_card_\"*.html)",
+      "Bash(rm -f questoes_extraidas.json scraper_checkpoint.json)",
+      "Bash(python3 -c \"import ast, sys; ast.parse\\(open\\('scraper.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(ls -la questoes_extraidas.json scraper_checkpoint.json)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(rm -f /tmp/modal_debug_*.html)",
+      "Bash(python3 -)",
+      "Bash(2>/dev/null)",
+      "Bash(cat \"/Users/lucasmoraes/Projects/Robo Simulados/scraper_checkpoint.json\")",
+      "Bash(python3 -c ' *)",
+      "Bash(echo \"Reiniciado. PID: $!\")",
+      "Bash(chmod +x \"/Users/lucasmoraes/Projects/Robo Simulados/run_loop.sh\")",
+      "Bash(bash run_loop.sh)",
+      "Bash(echo \"Loop PID: $!\")",
+      "Bash(open \"/Users/lucasmoraes/Projects/Robo Simulados/questoes_extraidas.json\")",
+      "Bash(pkill -f \"http.server 8765\")",
+      "Bash(python3 -m http.server 8765)",
+      "Bash(open \"http://localhost:8765/visualizar.html\")",
+      "Bash(python3 -c \"import scraper\")",
+      "Bash(python3 -c \"import json; qs=json.load\\(open\\('questoes_extraidas.json'\\)\\); print\\(f'Total: {len\\(qs\\)}'\\)\")",
+      "Bash(open \"/Users/lucasmoraes/Projects/Robo Simulados/por_materia\")",
+      "Bash(open \"/Users/lucasmoraes/Projects/Robo Simulados\")",
+      "Bash(python3 -c \"import json; q=json.load\\(open\\('questoes_extraidas.json'\\)\\); print\\(f'Total: {len\\(q\\)}'\\)\")"
+    ]
+  }
+}

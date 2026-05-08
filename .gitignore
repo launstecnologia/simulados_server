@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtualenvs
+venv/
+.venv/
+
+# OS/editor
+.DS_Store
+
+# Runtime artifacts
+logs/
+run_scraper.log
+scraper_checkpoint.json
+
+# Optional local outputs
+questoes_extraidas.json
+por_materia/*.json

@@ -1,0 +1,22 @@
+[Unit]
+Description=Robo Simulados extractor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=robo
+Group=robo
+WorkingDirectory=/opt/robo-simulados
+EnvironmentFile=-/opt/robo-simulados/.env.server
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/robo-simulados/.venv/bin/python /opt/robo-simulados/scraper.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGINT
+StandardOutput=append:/opt/robo-simulados/logs/robo-simulados.out.log
+StandardError=append:/opt/robo-simulados/logs/robo-simulados.err.log
+
+[Install]
+WantedBy=multi-user.target
