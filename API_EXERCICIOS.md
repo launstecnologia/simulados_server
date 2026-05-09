@@ -6,6 +6,16 @@ Base URL (produção):
 
 Formato de resposta: `application/json` (UTF-8)
 
+Fonte de dados atual da API: **MySQL** (não JSON direto).
+
+Variáveis usadas pela API:
+
+- `MYSQL_HOST` (padrão: `127.0.0.1`)
+- `MYSQL_PORT` (padrão: `3306`)
+- `MYSQL_USER` (padrão: `simulados_app`)
+- `MYSQL_PASSWORD` (padrão: `Campi_117910`)
+- `MYSQL_DATABASE` (padrão: `simulados`)
+
 ---
 
 ## 1) Healthcheck
