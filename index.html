@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Painel de Exercícios</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #111b2e;
+      --card: #16233b;
+      --text: #e8eefb;
+      --muted: #9fb0d1;
+      --ok: #2ecc71;
+      --warn: #f1c40f;
+      --err: #ff6b6b;
+      --line: #223454;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at top, #12203a 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    h1 {
+      margin: 0 0 16px;
+      font-size: 1.6rem;
+    }
+    .meta {
+      color: var(--muted);
+      margin-bottom: 20px;
+      font-size: 0.95rem;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(170px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .card {
+      background: linear-gradient(160deg, var(--card), var(--panel));
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 6px;
+    }
+    .value {
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .err { color: var(--err); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.95rem;
+    }
+    th {
+      color: var(--muted);
+      background: #0f1a2e;
+      position: sticky;
+      top: 0;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .right { text-align: right; }
+    .status {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Painel de Exercícios</h1>
+    <div class="meta">Resumo por matéria de <code>por_materia/questoes_*.json</code></div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="label">Total de exercícios</div>
+        <div id="totalEx" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Com alternativas</div>
+        <div id="totalAlt" class="value ok">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Abertas</div>
+        <div id="totalAberta" class="value warn">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Erro / incompletas</div>
+        <div id="totalErro" class="value err">-</div>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Matéria</th>
+          <th class="right">Total</th>
+          <th class="right">Alternativas</th>
+          <th class="right">Abertas</th>
+          <th class="right">Erro</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+
+    <div id="status" class="status">Carregando...</div>
+  </div>
+
+  <script src="./painel.js"></script>
+</body>
+</html>

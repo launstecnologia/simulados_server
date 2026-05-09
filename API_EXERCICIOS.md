@@ -249,3 +249,80 @@ curl -sS "http://69.62.86.185:8080/api/questoes?materia=Biologia&tipo=alternativ
 - A API retorna JSON bruto com HTML em alguns campos (`enunciado_html`, `resolucao_html`).
 - O campo `total` na rota `/api/questoes` respeita o filtro aplicado.
 - Para alto volume, prefira `limit` entre `100` e `300`.
+
+---
+
+## MySQL (sincronização horária)
+
+Arquivos no projeto:
+
+- `db/schema_mysql.sql`
+- `sync_mysql.py`
+
+### Objetivo
+
+Manter o JSON como fonte, mas também persistir no MySQL para consultas encadeadas rápidas no front.
+
+### Tabelas principais
+
+- `questoes` (questão base)
+- `materias`, `tipos`, `dificuldades`
+- `origens` (ano, título, número/código do simulado)
+- `topicos`, `tags`
+- vínculo N:N: `questao_topicos`, `questao_tags`
+
+### 1) Criar banco e tabelas
+
+```bash
+mysql -u root -p < /opt/robo-simulados/db/schema_mysql.sql
+```
+
+### 2) Variáveis de ambiente (exemplo)
+
+```bash
+export MYSQL_HOST=127.0.0.1
+export MYSQL_PORT=3306
+export MYSQL_USER=root
+export MYSQL_PASSWORD='SUA_SENHA'
+export MYSQL_DATABASE=simulados
+```
+
+### 3) Rodar carga inicial
+
+```bash
+cd /opt/robo-simulados
+/usr/bin/python3 sync_mysql.py
+```
+
+### 4) Agendar atualização de hora em hora
+
+```bash
+crontab -e
+```
+
+Adicionar:
+
+```cron
+0 * * * * cd /opt/robo-simulados && MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 MYSQL_USER=root MYSQL_PASSWORD='SUA_SENHA' MYSQL_DATABASE=simulados /usr/bin/python3 sync_mysql.py >> /opt/robo-simulados/logs/cron_sync_mysql.log 2>&1
+```
+
+### Exemplo de SQL para front com filtros encadeados
+
+```sql
+SELECT
+  q.id,
+  m.nome AS materia,
+  t.nome AS tipo,
+  d.nome AS dificuldade,
+  o.ano,
+  o.titulo AS origem_titulo,
+  o.numero AS codigo_simulado
+FROM questoes q
+LEFT JOIN materias m ON m.id = q.materia_id
+LEFT JOIN tipos t ON t.id = q.tipo_id
+LEFT JOIN dificuldades d ON d.id = q.dificuldade_id
+LEFT JOIN origens o ON o.id = q.origem_id
+WHERE t.nome LIKE '%multipla%'
+  AND m.nome = 'Química'
+  AND o.ano = '2025';
+```

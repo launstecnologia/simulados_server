@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
