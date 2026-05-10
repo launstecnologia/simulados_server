@@ -1,0 +1,16 @@
+[Unit]
+Description=Robo Simulados - Lotes por materia
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=robo
+Group=robo
+WorkingDirectory=/opt/robo-simulados
+EnvironmentFile=-/opt/robo-simulados/.env.server
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/flock -n /tmp/robo-simulados-lotes.lock /bin/bash /opt/robo-simulados/run_lotes_auto.sh
+StandardOutput=append:/opt/robo-simulados/logs/robo-simulados-lotes.out.log
+StandardError=append:/opt/robo-simulados/logs/robo-simulados-lotes.err.log
+

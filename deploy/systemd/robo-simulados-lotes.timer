@@ -1,0 +1,13 @@
+[Unit]
+Description=Agenda lotes do Robo Simulados
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=60min
+AccuracySec=1min
+Persistent=true
+Unit=robo-simulados-lotes.service
+
+[Install]
+WantedBy=timers.target
+
