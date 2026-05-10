@@ -18,7 +18,10 @@ MODO_RAPIDO = True
 HEADLESS = os.getenv("ROBO_HEADLESS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 # BNCC e textos vinculados são modais extras por questão — desligue se não precisar no JSON (maior ganho).
 EXTRAIR_TEXTOS_VINCULADOS = False
-EXTRAIR_BNCC = False
+EXTRAIR_BNCC = os.getenv("ROBO_EXTRAIR_BNCC", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+MATERIA_ALVO = os.getenv("ROBO_MATERIA", "").strip()
+# Quando ativo, trata a mesma questão em matérias diferentes como registros distintos.
+UNICO_POR_ID_E_MATERIA = os.getenv("ROBO_UNICO_POR_ID_MATERIA", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def espera(segundos):
@@ -121,6 +124,18 @@ FILTROS = {
     "Volumes":           [],
 }
 # ─────────────────────────────────────────────────────────
+if MATERIA_ALVO:
+    FILTROS["Matérias"] = [MATERIA_ALVO]
+
+
+def _chave_questao(q):
+    qid = (q.get("id") or "").strip()
+    if not qid:
+        return ""
+    if not UNICO_POR_ID_E_MATERIA:
+        return qid
+    materia = (q.get("materia") or "").strip().upper()
+    return f"{qid}__{materia}"
 
 
 def salvar(questoes):
@@ -1037,12 +1052,15 @@ def run(playwright):
     print("=" * 50)
     print("  ROBO AVALIA FÁCIL")
     print("=" * 50)
+    if MATERIA_ALVO:
+        print(f"[MODO] Matéria alvo: {MATERIA_ALVO}")
+    print(f"[MODO] BNCC: {'ON' if EXTRAIR_BNCC else 'OFF'} | Chave única: {'id+matéria' if UNICO_POR_ID_E_MATERIA else 'id'}")
 
     browser = playwright.chromium.launch(headless=False)
     ctx     = browser.new_context()
     page    = ctx.new_page()
     questoes = carregar()
-    ids_salvos = {q["id"] for q in questoes if q.get("id")}
+    ids_salvos = {_chave_questao(q) for q in questoes if _chave_questao(q)}
     pagina = 1
     indice_inicial = 0
     checkpoint_pre = carregar_checkpoint()
@@ -1241,15 +1259,31 @@ def run(playwright):
                     if not qid:
                         salvar_checkpoint(pagina, i + 1)
                         continue
-                    if qid in ids_salvos:
-                        print(f"  [{i+1}] #{qid} já salva, pulando.")
+                    materia_card = card.evaluate(
+                        """el => {
+                            const subEl = el.querySelector('[class*="_subheader"], [class*="subheader__"]');
+                            if (!subEl) return '';
+                            const spans = Array.from(subEl.querySelectorAll('span')).map(s => (s.innerText || '').trim()).filter(Boolean);
+                            if (spans.length === 0) return '';
+                            const difs = new Set(['fácil','facil','médio','medio','difícil','dificil']);
+                            for (const t of spans) {
+                                if (!difs.has((t || '').toLowerCase())) return t;
+                            }
+                            return '';
+                        }"""
+                    )
+                    chave_card = f"{qid}__{(materia_card or '').strip().upper()}" if UNICO_POR_ID_E_MATERIA else qid
+
+                    if chave_card in ids_salvos:
+                        sufixo = f" ({materia_card})" if materia_card else ""
+                        print(f"  [{i+1}] #{qid}{sufixo} já salva, pulando.")
                         salvar_checkpoint(pagina, i + 1, qid)
                         continue
 
                     print(f"  [{i+1}] #{qid}...")
                     q = extrair_card(card, ap)
                     questoes.append(q)
-                    ids_salvos.add(qid)
+                    ids_salvos.add(_chave_questao(q))
                     salvar_checkpoint(pagina, i + 1, qid)
 
                     if len(questoes) % 10 == 0:
