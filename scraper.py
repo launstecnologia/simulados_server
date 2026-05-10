@@ -33,6 +33,7 @@ if IDS_QUESTOES_ARQUIVO and not IDS_QUESTOES_ALVO:
         IDS_QUESTOES_ALVO = []
 ESPERA_BNCC_SEG = float(os.getenv("ROBO_ESPERA_BNCC", "3"))
 RELOAD_ENTRE_IDS = os.getenv("ROBO_RELOAD_ENTRE_IDS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+MAX_PULOS_CONSEC = int(os.getenv("ROBO_MAX_PULOS_CONSEC", "0")) or None   # 0/None = desativado
 # Quando ativo, trata a mesma questão em matérias diferentes como registros distintos.
 UNICO_POR_ID_E_MATERIA = os.getenv("ROBO_UNICO_POR_ID_MATERIA", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -1604,6 +1605,7 @@ def run(playwright):
             print(f"  [CHECKPOINT] Listagem na pág. {pagina}; primeiro índice na lista: {indice_inicial + 1}.\n")
 
         terminou_todas_paginas = False
+        pulos_consecutivos = 0
 
         while True:
             if meta_q is not None and len(questoes) >= meta_q:
@@ -1687,13 +1689,26 @@ def run(playwright):
                     if chave_card in ids_salvos:
                         sufixo = f" ({materia_card})" if materia_card else ""
                         print(f"  [{i+1}] #{qid}{sufixo} já salva, pulando.")
+                        pulos_consecutivos += 1
                         salvar_checkpoint(pagina, i + 1, qid)
+                        if MAX_PULOS_CONSEC is not None and pulos_consecutivos >= MAX_PULOS_CONSEC:
+                            print(
+                                f"\n  Limite de pulos consecutivos atingido "
+                                f"({pulos_consecutivos} ≥ {MAX_PULOS_CONSEC}). "
+                                f"Encerrando matéria para próxima rotação."
+                            )
+                            salvar(questoes)
+                            apagar_checkpoint()
+                            terminou_todas_paginas = True
+                            atingiu_meta_questoes = True
+                            break
                         continue
 
                     print(f"  [{i+1}] #{qid}...")
                     q = extrair_card(card, ap)
                     questoes.append(q)
                     ids_salvos.add(_chave_questao(q))
+                    pulos_consecutivos = 0
                     novas_rodada += 1
                     salvar_checkpoint(pagina, i + 1, qid)
 

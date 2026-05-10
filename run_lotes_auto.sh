@@ -13,6 +13,7 @@ export EXTRAIR_BNCC="${EXTRAIR_BNCC:-1}"
 export RELOAD_ENTRE_IDS="${RELOAD_ENTRE_IDS:-1}"
 export UNICO_POR_ID_MATERIA="${UNICO_POR_ID_MATERIA:-1}"
 export LOTE_POR_MATERIA="${LOTE_POR_MATERIA:-1000}"
+export ROBO_MAX_PULOS_CONSEC="${ROBO_MAX_PULOS_CONSEC:-600}"
 
 /bin/bash /opt/robo-simulados/run_lotes_por_materia.sh
 
