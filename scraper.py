@@ -11,6 +11,7 @@ CHECKPOINT = os.getenv("ROBO_CHECKPOINT", "scraper_checkpoint.json")  # página,
 ATIVIDADE_URL = "https://avaliafacil.grupoetapa.com.br/avaliafacil/listas/atividade/182353"  # banco geral (30k+ páginas)
 PAGINAS_LIMITE = int(os.getenv("ROBO_PAGINAS_LIMITE", "0")) or None     # 0/None = todas as páginas
 MAX_QUESTOES = int(os.getenv("ROBO_MAX_QUESTOES", "0")) or None          # 0/None = sem limite
+MAX_NOVAS = int(os.getenv("ROBO_MAX_NOVAS", "0")) or None                # 0/None = sem limite de novas nesta execução
 
 # ── Desempenho ───────────────────────────────────────────
 # MODO_RAPIDO: pausas ~40% do normal + paginação espera pelo DOM em vez de sleep fixo longo.
@@ -22,6 +23,14 @@ EXTRAIR_BNCC = os.getenv("ROBO_EXTRAIR_BNCC", "1").strip().lower() in {"1", "tru
 MATERIA_ALVO = os.getenv("ROBO_MATERIA", "").strip()
 ID_QUESTAO_ALVO = os.getenv("ROBO_ID_QUESTAO", "").strip()
 IDS_QUESTOES_ALVO = [s.strip() for s in os.getenv("ROBO_IDS_QUESTOES", "").split(",") if s.strip()]
+IDS_QUESTOES_ARQUIVO = os.getenv("ROBO_IDS_ARQUIVO", "").strip()
+if IDS_QUESTOES_ARQUIVO and not IDS_QUESTOES_ALVO:
+    try:
+        with open(IDS_QUESTOES_ARQUIVO, encoding="utf-8") as f:
+            bruto_ids = f.read()
+        IDS_QUESTOES_ALVO = [s.strip() for s in re.split(r"[,\n\r; ]+", bruto_ids) if s.strip()]
+    except Exception:
+        IDS_QUESTOES_ALVO = []
 ESPERA_BNCC_SEG = float(os.getenv("ROBO_ESPERA_BNCC", "3"))
 RELOAD_ENTRE_IDS = os.getenv("ROBO_RELOAD_ENTRE_IDS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 # Quando ativo, trata a mesma questão em matérias diferentes como registros distintos.
@@ -1343,6 +1352,7 @@ def run(playwright):
     ctx     = browser.new_context()
     page    = ctx.new_page()
     questoes = carregar()
+    novas_rodada = 0
     ids_salvos = {_chave_questao(q) for q in questoes if _chave_questao(q)}
     pagina = 1
     indice_inicial = 0
@@ -1520,6 +1530,15 @@ def run(playwright):
                         questoes.append(q)
                         salvar(questoes)
                         ids_salvos.add(_chave_questao(q))
+                        novas_rodada += 1
+                        if MAX_NOVAS is not None and novas_rodada >= MAX_NOVAS:
+                            print(f"\n[LOTE IDs] Limite de novas na rodada atingido ({novas_rodada} ≥ {MAX_NOVAS}).")
+                            apagar_checkpoint()
+                            print(f"[LOTE IDs] Concluído. Total no arquivo: {len(questoes)}")
+                            print("\n" + "=" * 50)
+                            print(f"  CONCLUÍDO! {len(questoes)} questões em '{SAIDA}'")
+                            print("=" * 50)
+                            return
                     except Exception as e:
                         print(f"  - erro no card {i+1}: {e}")
 
@@ -1589,6 +1608,9 @@ def run(playwright):
         while True:
             if meta_q is not None and len(questoes) >= meta_q:
                 print(f"\n  Meta de questões atingida ({len(questoes)} ≥ {meta_q}). Encerrando extração.")
+                break
+            if MAX_NOVAS is not None and novas_rodada >= MAX_NOVAS:
+                print(f"\n  Limite de novas na rodada atingido ({novas_rodada} ≥ {MAX_NOVAS}). Encerrando extração.")
                 break
 
             print(f"── Pág {pagina}{' / ' + str(total) if total else ''} ──")
@@ -1672,6 +1694,7 @@ def run(playwright):
                     q = extrair_card(card, ap)
                     questoes.append(q)
                     ids_salvos.add(_chave_questao(q))
+                    novas_rodada += 1
                     salvar_checkpoint(pagina, i + 1, qid)
 
                     if len(questoes) % 10 == 0:
@@ -1680,6 +1703,11 @@ def run(playwright):
 
                     if meta_q is not None and len(questoes) >= meta_q:
                         print(f"\n  Meta de {meta_q} questões no arquivo atingida ({len(questoes)} no total).")
+                        salvar(questoes)
+                        atingiu_meta_questoes = True
+                        break
+                    if MAX_NOVAS is not None and novas_rodada >= MAX_NOVAS:
+                        print(f"\n  Limite de novas na rodada atingido ({novas_rodada} ≥ {MAX_NOVAS}).")
                         salvar(questoes)
                         atingiu_meta_questoes = True
                         break
