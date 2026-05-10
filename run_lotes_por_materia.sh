@@ -32,12 +32,16 @@ echo "Headless: ${HEADLESS} | BNCC: ${EXTRAIR_BNCC}"
 echo
 
 for materia in "${MATERIAS[@]}"; do
+  slug="$(echo "$materia" | tr '[:upper:]' '[:lower:]' | sed 's/[[:space:]]\+/_/g' | sed 's/[^a-z0-9_]/_/g')"
+  checkpoint_materia="checkpoints/scraper_checkpoint_${slug}.json"
+
   echo "=================================================="
   echo "MATÉRIA: ${materia}"
   echo "=================================================="
+  mkdir -p checkpoints
 
   ROBO_SAIDA="${SAIDA_BASE}" \
-  ROBO_CHECKPOINT="${CHECKPOINT_BASE}" \
+  ROBO_CHECKPOINT="${checkpoint_materia}" \
   ROBO_MATERIA="${materia}" \
   ROBO_MAX_NOVAS="${LOTE_POR_MATERIA}" \
   ROBO_EXTRAIR_BNCC="${EXTRAIR_BNCC}" \
