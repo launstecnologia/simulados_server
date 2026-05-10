@@ -6,11 +6,11 @@ from datetime import datetime
 # ── CONFIGURAÇÕES ────────────────────────────────────────
 EMAIL = os.getenv("ROBO_EMAIL", "matheustozzo@yahoo.com.br")
 SENHA = os.getenv("ROBO_SENHA", "Mat09074170#")
-SAIDA = "questoes_extraidas.json"
-CHECKPOINT = "scraper_checkpoint.json"  # página, índice e horário da última pausa
+SAIDA = os.getenv("ROBO_SAIDA", "questoes_extraidas.json")
+CHECKPOINT = os.getenv("ROBO_CHECKPOINT", "scraper_checkpoint.json")  # página, índice e horário da última pausa
 ATIVIDADE_URL = "https://avaliafacil.grupoetapa.com.br/avaliafacil/listas/atividade/182353"  # banco geral (30k+ páginas)
-PAGINAS_LIMITE = None     # None = todas as páginas
-MAX_QUESTOES = None       # None = sem limite (extrai todas as questões)
+PAGINAS_LIMITE = int(os.getenv("ROBO_PAGINAS_LIMITE", "0")) or None     # 0/None = todas as páginas
+MAX_QUESTOES = int(os.getenv("ROBO_MAX_QUESTOES", "0")) or None          # 0/None = sem limite
 
 # ── Desempenho ───────────────────────────────────────────
 # MODO_RAPIDO: pausas ~40% do normal + paginação espera pelo DOM em vez de sleep fixo longo.
@@ -20,6 +20,10 @@ HEADLESS = os.getenv("ROBO_HEADLESS", "1").strip().lower() in {"1", "true", "yes
 EXTRAIR_TEXTOS_VINCULADOS = False
 EXTRAIR_BNCC = os.getenv("ROBO_EXTRAIR_BNCC", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 MATERIA_ALVO = os.getenv("ROBO_MATERIA", "").strip()
+ID_QUESTAO_ALVO = os.getenv("ROBO_ID_QUESTAO", "").strip()
+IDS_QUESTOES_ALVO = [s.strip() for s in os.getenv("ROBO_IDS_QUESTOES", "").split(",") if s.strip()]
+ESPERA_BNCC_SEG = float(os.getenv("ROBO_ESPERA_BNCC", "3"))
+RELOAD_ENTRE_IDS = os.getenv("ROBO_RELOAD_ENTRE_IDS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 # Quando ativo, trata a mesma questão em matérias diferentes como registros distintos.
 UNICO_POR_ID_E_MATERIA = os.getenv("ROBO_UNICO_POR_ID_MATERIA", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -126,6 +130,11 @@ FILTROS = {
 # ─────────────────────────────────────────────────────────
 if MATERIA_ALVO:
     FILTROS["Matérias"] = [MATERIA_ALVO]
+if ID_QUESTAO_ALVO or IDS_QUESTOES_ALVO:
+    # Teste por ID: não selecionar matérias para evitar restringir indevidamente.
+    FILTROS["Matérias"] = []
+    if ID_QUESTAO_ALVO:
+        FILTROS["ID da Questão"] = [ID_QUESTAO_ALVO]
 
 
 def _chave_questao(q):
@@ -134,6 +143,10 @@ def _chave_questao(q):
         return ""
     if not UNICO_POR_ID_E_MATERIA:
         return qid
+    mats = q.get("materias") or []
+    mats_norm = sorted({str(m).strip().upper() for m in mats if str(m).strip()})
+    if mats_norm:
+        return f"{qid}__{'|'.join(mats_norm)}"
     materia = (q.get("materia") or "").strip().upper()
     return f"{qid}__{materia}"
 
@@ -565,15 +578,90 @@ def extrair_resolucao(page):
     return ""
 
 
+def extrair_resolucao_com_retry(page, card, tentativas=3):
+    """
+    Tenta abrir resolução mais de uma vez.
+    Retorna HTML (ou string vazia).
+    """
+    for _ in range(tentativas):
+        try:
+            page.evaluate("() => { document.querySelectorAll('[class*=\"MuiDialog-root\"], .swal2-container').forEach(d => d.remove()); }")
+            time.sleep(espera(0.2))
+            clicou = card.evaluate("""
+                el => {
+                    const footer = el.querySelector('[class*="listas-view_footer"], [class*="listas-view_options"], [class*="_footer"], [class*="footer__"]');
+                    if (!footer) return false;
+                    for (const s of footer.querySelectorAll('span, button, a')) {
+                        const txt = (s.innerText || '').trim().toLowerCase();
+                        const cls = (s.className || '').toLowerCase();
+                        if (txt === 'resolução' || txt === 'resolucao' || cls.includes('resolucao')) { s.click(); return true; }
+                    }
+                    return false;
+                }
+            """)
+            if not clicou:
+                continue
+            try:
+                page.wait_for_selector('[class*="MuiDialogContent"], .swal2-html-container', timeout=7000)
+            except Exception:
+                pass
+            time.sleep(espera(0.35))
+            html = extrair_resolucao(page)
+            if html:
+                return html
+        except Exception:
+            pass
+        finally:
+            fechar_modal(page)
+            time.sleep(espera(0.25))
+    return ""
+
+
 # ── EXTRAIR BNCC ──────────────────────────────────────────
 def extrair_bncc(page):
     """
     Modal MUI aberto. Tenta múltiplas estratégias para extrair {materia, codigo, habilidade}.
     """
     try:
-        page.wait_for_selector('[class*="MuiDialogContent"], [class*="MuiDialog-paper"]', timeout=8000)
+        page.wait_for_selector('[class*="MuiDialogContent"], [class*="MuiDialog-paper"]', timeout=12000)
     except:
         return []
+
+    # Aguarda conteúdo real do BNCC aparecer (ex.: EM13..., EF09...)
+    try:
+        page.wait_for_function(
+            """
+            () => {
+                const dialogs = [...document.querySelectorAll('[class*="MuiDialog-paper"], [class*="MuiDialogContent"], .swal2-html-container')]
+                    .filter(el => el && el.offsetParent !== null);
+                if (!dialogs.length) return false;
+                const txt = dialogs.map(d => d.innerText || '').join('\\n');
+                return /\\b(?:EM|EF)\\d{2}[A-Z]{2,4}\\d{2,3}\\b/.test(txt) || txt.toLowerCase().includes('bncc');
+            }
+            """,
+            timeout=9000
+        )
+    except Exception:
+        pass
+
+    # Espera extra para conteúdo assíncrono do BNCC
+    time.sleep(max(0.2, ESPERA_BNCC_SEG))
+
+    # Scroll no conteúdo do modal para forçar render de itens virtualizados
+    page.evaluate("""
+        () => {
+            const scrollers = [...document.querySelectorAll('[class*="MuiDialogContent"], [class*="MuiPaper-root"], .swal2-html-container')]
+                .filter(el => el && el.offsetParent !== null);
+            for (const el of scrollers) {
+                try {
+                    el.scrollTop = 0;
+                    el.scrollTop = el.scrollHeight;
+                    el.scrollTop = 0;
+                } catch (e) {}
+            }
+        }
+    """)
+    time.sleep(espera(0.5))
 
     # Expande todos os accordions fechados
     page.evaluate("""
@@ -581,18 +669,50 @@ def extrair_bncc(page):
             document.querySelectorAll(
                 '[class*="MuiAccordionSummary-root"], [class*="MuiAccordion-root"] [role="button"]'
             ).forEach(h => {
-                if (h.getAttribute('aria-expanded') !== 'true') h.click();
+                if (h.offsetParent !== null && h.getAttribute('aria-expanded') !== 'true') h.click();
             });
         }
     """)
     time.sleep(espera(0.6))
+    # Fallback: tenta expandir seções por título de matéria (ex.: Sociologia/Geografia)
+    page.evaluate("""
+        () => {
+            const materias = ['arte','biologia','eletivas','filosofia','física','fisica','geografia','história','historia','inglês','ingles','matemática','matematica','português','portugues','química','quimica','sociologia'];
+            const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');
+            const candidatos = [...document.querySelectorAll('[role="button"], [class*="MuiAccordionSummary-root"], [class*="MuiAccordion-root"] *')];
+            for (const el of candidatos) {
+                if (!el || el.offsetParent === null) continue;
+                const txt = norm((el.innerText || '').trim());
+                if (!txt) continue;
+                if (materias.includes(txt) || materias.some(m => txt === m || txt.startsWith(m + ' '))) {
+                    const btn = el.closest('[role="button"], [class*="MuiAccordionSummary-root"]') || el;
+                    const expanded = btn.getAttribute && btn.getAttribute('aria-expanded');
+                    if (expanded !== 'true') {
+                        try { btn.click(); } catch(e) {}
+                    }
+                }
+            }
+        }
+    """)
+    time.sleep(espera(0.8))
+    # segunda passada de expansão após conteúdo assíncrono
+    page.evaluate("""
+        () => {
+            document.querySelectorAll('[class*="MuiAccordionSummary-root"], [class*="MuiAccordion-root"] [role="button"]').forEach(h => {
+                if (h.offsetParent !== null && h.getAttribute('aria-expanded') !== 'true') h.click();
+            });
+        }
+    """)
+    time.sleep(espera(0.5))
 
     return page.evaluate("""
         () => {
             // Raiz: tenta MuiDialogContent, senão o dialog inteiro
+            const visiveis = sel => [...document.querySelectorAll(sel)].filter(el => el && el.offsetParent !== null);
             const modal =
-                document.querySelector('[class*="MuiDialogContent"]') ||
-                document.querySelector('[class*="MuiDialog-paper"]');
+                visiveis('[class*="MuiDialogContent"]')[0] ||
+                visiveis('[class*="MuiDialog-paper"]')[0] ||
+                visiveis('.swal2-html-container')[0];
             if (!modal) return [];
 
             const dados = [];
@@ -656,12 +776,59 @@ def extrair_bncc(page):
     """)
 
 
+def extrair_bncc_com_retry(page, card, tentativas=3):
+    """
+    Tenta abrir e extrair BNCC mais de uma vez.
+    Retorna lista BNCC (pode ser vazia).
+    """
+    for t in range(1, tentativas + 1):
+        try:
+            page.evaluate("() => { document.querySelectorAll('[class*=\"MuiDialog-root\"], .swal2-container').forEach(d => d.remove()); }")
+            time.sleep(espera(0.2))
+            clicou_bncc = card.evaluate("""
+                el => {
+                    const footer = el.querySelector('[class*="listas-view_footer"], [class*="listas-view_options"], [class*="_footer"], [class*="footer__"]');
+                    if (!footer) return false;
+                    for (const s of footer.querySelectorAll('span, button, a')) {
+                        const txt = (s.innerText || '').trim().toLowerCase();
+                        const cls = (s.className || '').toLowerCase();
+                        if (txt === 'bncc' || cls.includes('bncc')) { s.click(); return true; }
+                    }
+                    return false;
+                }
+            """)
+            if not clicou_bncc:
+                time.sleep(espera(0.25))
+                continue
+            try:
+                page.wait_for_selector('[class*="MuiDialogContent"], [class*="MuiDialog-paper"]', timeout=7000)
+            except Exception:
+                pass
+            time.sleep(espera(0.35))
+            dados = extrair_bncc(page)
+            if dados:
+                return dados
+        except Exception:
+            pass
+        finally:
+            fechar_modal(page)
+            time.sleep(espera(0.25))
+
+        # fallback: força abertura de resolução entre tentativas para estabilizar render do card
+        if t < tentativas:
+            try:
+                _ = extrair_resolucao_com_retry(page, card, tentativas=1)
+            except Exception:
+                pass
+    return []
+
+
 # ── EXTRAIR CARD ──────────────────────────────────────────
 def extrair_card(card, page):
     q = {
         "id": "", "tipo": "",
         "origem": {"titulo": "", "ano": "", "numero": "", "extras": [], "raw": ""},
-        "dificuldade": "", "materia": "", "topicos": [], "tags": [],
+        "dificuldade": "", "materia": "", "materias": [], "topicos": [], "tags": [],
         "enunciado_html": "", "alternativas": {},
         "gabarito": None, "resolucao_html": "", "textos_html": "", "bncc": []
     }
@@ -703,21 +870,31 @@ def extrair_card(card, page):
 
             // ── Subheader: dificuldade + matéria + tópicos ──
             const subEl = el.querySelector('[class*="_subheader"], [class*="subheader__"]');
-            let dificuldade = '', materia = '', topicos = [], tags = [];
+            let dificuldade = '', materia = '', materias = [], topicos = [], tags = [];
             if (subEl) {
                 const spans = Array.from(subEl.querySelectorAll('span'));
+                const materiasSet = new Set([
+                    'arte', 'biologia', 'eletivas', 'filosofia', 'física', 'fisica',
+                    'geografia', 'história', 'historia', 'inglês', 'ingles',
+                    'matemática', 'matematica', 'português', 'portugues',
+                    'química', 'quimica', 'sociologia'
+                ]);
                 for (const s of spans) {
                     const t = s.innerText.trim();
                     if (!t) continue;
                     tags.push(t);
+                    const n = t.toLowerCase();
                     if (s.className && s.className.includes('dificuldade')) {
                         dificuldade = t;
-                    } else if (!materia) {
-                        materia = t; // primeiro span não-dificuldade = matéria
                     } else {
-                        topicos.push(t); // demais = tópicos/subtópicos
+                        if (materiasSet.has(n)) {
+                            if (!materias.includes(t)) materias.push(t);
+                        } else {
+                            topicos.push(t); // demais = tópicos/subtópicos
+                        }
                     }
                 }
+                if (materias.length > 0) materia = materias[0];
             }
 
             return {
@@ -726,6 +903,7 @@ def extrair_card(card, page):
                 origem,
                 dificuldade,
                 materia,
+                materias,
                 topicos,
                 tags,
                 enunciado: html('[class*="_enunciado"], [class*="enunciado__"]'),
@@ -738,6 +916,7 @@ def extrair_card(card, page):
     q["origem"]      = dados.get("origem", {"titulo":"","ano":"","numero":"","extras":[],"raw":""})
     q["dificuldade"] = dados.get("dificuldade", "")
     q["materia"]     = dados.get("materia", "")
+    q["materias"]    = dados.get("materias", []) or ([q["materia"]] if q["materia"] else [])
     q["topicos"]     = dados.get("topicos", [])
     q["tags"]        = dados.get("tags", [])
 
@@ -867,52 +1046,22 @@ def extrair_card(card, page):
     # ── Resolução ────────────────────────────────────────
     if botoes.get('resolucao'):
         try:
-            clicou = clicar_no_footer('resolução', 'resolucao')
-            if clicou:
-                # Aguarda o modal MUI abrir e o conteúdo carregar
-                try:
-                    page.wait_for_selector('[class*="MuiDialogContent"], .swal2-html-container', timeout=4000)
-                except Exception:
-                    pass
-                try:
-                    page.wait_for_function("""
-                        () => {
-                            const mu = document.querySelector('[class*="MuiDialogContent"]');
-                            const sw = document.querySelector('.swal2-html-container');
-                            const el = (mu && mu.offsetParent !== null ? mu : sw) || mu || sw;
-                            if (!el) return false;
-                            const text = (el.innerText || '').trim();
-                            return text.length > 5 && !text.toLowerCase().includes('carregando');
-                        }
-                    """, timeout=8000)
-                except Exception:
-                    pass
-                html = page.evaluate("""
-                    () => {
-                        const mu = document.querySelector('[class*="MuiDialogContent"]');
-                        if (mu) return mu.innerHTML;
-                        const sw = document.querySelector('.swal2-html-container');
-                        if (sw) return sw.innerHTML;
-                        return '';
-                    }
-                """)
-                if html:
-                    q["resolucao_html"] = html
-                    print(f"    [res] OK ({len(html)} chars)")
-                    # Fallback: em vários cards de múltipla escolha, as alternativas
-                    # vêm dentro do modal de resolução (sem botão "Alternativas").
-                    if _tipo_multipla(q.get("tipo")) and not q.get("alternativas"):
-                        alts_res, gabarito_res = extrair_alternativas_de_html(page, html)
-                        if alts_res:
-                            q["alternativas"] = alts_res
-                            if gabarito_res:
-                                q["gabarito"] = gabarito_res
-                            print(f"    [alt<-res] OK ({len(alts_res)} alternativas, gabarito={q.get('gabarito')})")
-                else:
-                    print(f"    [res] clicou mas modal vazio")
-                    q["extracao_tentada"] = True   # sem conteúdo → não retenta
-            else:
-                print(f"    [res] botão não encontrado no footer")
+            html = extrair_resolucao_com_retry(page, card, tentativas=3)
+            if html:
+                q["resolucao_html"] = html
+                print(f"    [res] OK ({len(html)} chars)")
+                # Fallback: em vários cards de múltipla escolha, as alternativas
+                # vêm dentro do modal de resolução (sem botão "Alternativas").
+                if _tipo_multipla(q.get("tipo")) and not q.get("alternativas"):
+                    alts_res, gabarito_res = extrair_alternativas_de_html(page, html)
+                    if alts_res:
+                        q["alternativas"] = alts_res
+                        if gabarito_res:
+                            q["gabarito"] = gabarito_res
+                        print(f"    [alt<-res] OK ({len(alts_res)} alternativas, gabarito={q.get('gabarito')})")
+            elif botoes.get('resolucao'):
+                print(f"    [res] sem dados (após retries)")
+                q["extracao_tentada"] = True   # sem conteúdo → não retenta
         except Exception as e:
             print(f"    [res] {e}")
         finally:
@@ -954,28 +1103,13 @@ def extrair_card(card, page):
     # ── BNCC ─────────────────────────────────────────────
     if EXTRAIR_BNCC and botoes.get('bncc'):
         try:
-            page.evaluate("() => { document.querySelectorAll('[class*=\"MuiDialog-root\"], .swal2-container').forEach(d => d.remove()); }")
-            time.sleep(espera(0.25))
-            clicou_bncc = card.evaluate("""
-                el => {
-                    for (const s of el.querySelectorAll('span, button, a')) {
-                        if ((s.innerText || '').trim() === 'BNCC') { s.click(); return true; }
-                    }
-                    return false;
-                }
-            """)
-            if clicou_bncc:
-                try:
-                    page.wait_for_selector('[class*="MuiDialogContent"], [class*="MuiDialog-paper"]', timeout=6000)
-                except Exception:
-                    pass
-                time.sleep(espera(0.45))
-                q["bncc"] = extrair_bncc(page)
+            q["bncc"] = extrair_bncc_com_retry(page, card, tentativas=3)
+            if q["bncc"]:
+                print(f"    [bncc] OK ({len(q['bncc'])} itens)")
+            else:
+                print("    [bncc] sem dados (após retries)")
         except Exception as e:
             print(f"    [bncc] {e}")
-        finally:
-            fechar_modal(page)
-            time.sleep(espera(0.4))
 
     # ── Alternativas (SweetAlert2 — ÚLTIMO para não interferir MUI) ──
     if botoes.get('alternativas'):
@@ -1026,6 +1160,91 @@ def aplicar_filtro(page, nome, valores):
     e fecha.
     """
     try:
+        # Campo textual especial (não é dropdown de opções)
+        if nome == "ID da Questão":
+            valor = valores[0] if isinstance(valores, list) and valores else valores
+            valor = (valor or "").strip()
+            if not valor:
+                return
+            ok = False
+            # 1) preferencial: input logo abaixo do label "ID da Questão"
+            try:
+                inp = page.locator("text=ID da Questão").locator(
+                    "xpath=ancestor::div[1]/following-sibling::div//input"
+                ).first
+                inp.click(timeout=5000)
+                ok = True
+            except Exception:
+                pass
+
+            # 2) fallback: input MUI com ícone no início
+            if not ok:
+                try:
+                    inp = page.locator('input.MuiInputBase-inputAdornedStart[type=\"text\"]').first
+                    inp.click(timeout=5000)
+                    ok = True
+                except Exception:
+                    pass
+
+            # 3) fallback por DOM: bloco com texto "ID da Questão" + primeiro input de texto
+            if not ok:
+                try:
+                    ok = page.evaluate(
+                        """
+                        (target) => {
+                            const norm = s => (s || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+                            const label = [...document.querySelectorAll('*')].find(
+                                el => norm(el.textContent || '') === 'id da questão'
+                            );
+                            if (!label) return false;
+                            let box = label.closest('div');
+                            for (let i = 0; i < 6 && box; i++) {
+                                const inp = box.querySelector('input[type="text"], textarea');
+                                if (inp) {
+                                    inp.focus();
+                                    inp.value = '';
+                                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                    inp.value = String(target);
+                                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                                    return true;
+                                }
+                                box = box.parentElement;
+                            }
+                            return false;
+                        }
+                        """,
+                        valor,
+                    )
+                except Exception:
+                    ok = False
+
+            if not ok:
+                print(f"  ✗ {nome}: campo não encontrado no DOM")
+                return
+
+            # Digitação real para React/MUI captar alteração
+            try:
+                inp.press("Control+A")
+            except Exception:
+                pass
+            try:
+                inp.press("Meta+A")
+            except Exception:
+                pass
+            try:
+                inp.press("Backspace")
+            except Exception:
+                pass
+            inp.type(valor, delay=40)
+            try:
+                inp.press("Enter")
+            except Exception:
+                pass
+            time.sleep(0.8)
+            print(f"  ✓ {nome}: {valor}")
+            return
+
         # O combobox fica dentro do elemento com aria-description=nome
         combobox = page.locator(f'[aria-description="{nome}"] [role="combobox"]')
         combobox.click(timeout=5000)
@@ -1047,6 +1266,70 @@ def aplicar_filtro(page, nome, valores):
         page.keyboard.press("Escape")
 
 
+def clicar_aplicar_filtros(page):
+    """
+    Clica em 'Aplicar filtros' com proteção contra modal overlay (SweetAlert2).
+    """
+    # remove overlays que bloqueiam clique
+    page.evaluate("""
+        () => {
+            document.body.classList.remove(
+                'swal2-shown', 'swal2-height-auto', 'swal2-no-backdrop',
+                'swal2-iosfix', 'swal2-toast-shown'
+            );
+            document.querySelectorAll('.swal2-container, .swal2-popup').forEach(el => el.remove());
+            document.querySelectorAll('[class*="MuiDialog-root"]').forEach(el => {
+                const closeBtn = el.querySelector('button[aria-label="Close"], button:has-text("Fechar")');
+                if (closeBtn) closeBtn.click();
+            });
+        }
+    """)
+    time.sleep(espera(0.2))
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    time.sleep(espera(0.15))
+
+    btn = page.locator("button:has-text('Aplicar filtros')").first
+    try:
+        btn.click(timeout=8000)
+    except Exception:
+        # fallback JS click
+        page.evaluate("""
+            () => {
+                const b = [...document.querySelectorAll('button')].find(x => (x.innerText || '').trim() === 'Aplicar filtros');
+                if (b) b.click();
+            }
+        """)
+
+
+def limpar_estado_ui(page):
+    """Limpa overlays/backdrops/dialogs pendentes que bloqueiam cliques e render assíncrona."""
+    try:
+        page.evaluate("""
+            () => {
+                document.body.classList.remove(
+                    'swal2-shown', 'swal2-height-auto', 'swal2-no-backdrop',
+                    'swal2-iosfix', 'swal2-toast-shown'
+                );
+                document.querySelectorAll('.swal2-container, .swal2-popup, [class*="MuiBackdrop-root"]').forEach(el => {
+                    try { el.remove(); } catch(e) {}
+                });
+                document.querySelectorAll('[class*="MuiDialog-root"]').forEach(el => {
+                    try { el.remove(); } catch(e) {}
+                });
+            }
+        """)
+    except Exception:
+        pass
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    time.sleep(espera(0.25))
+
+
 # ── MAIN ─────────────────────────────────────────────────
 def run(playwright):
     print("=" * 50)
@@ -1056,7 +1339,7 @@ def run(playwright):
         print(f"[MODO] Matéria alvo: {MATERIA_ALVO}")
     print(f"[MODO] BNCC: {'ON' if EXTRAIR_BNCC else 'OFF'} | Chave única: {'id+matéria' if UNICO_POR_ID_E_MATERIA else 'id'}")
 
-    browser = playwright.chromium.launch(headless=False)
+    browser = playwright.chromium.launch(headless=HEADLESS)
     ctx     = browser.new_context()
     page    = ctx.new_page()
     questoes = carregar()
@@ -1145,16 +1428,121 @@ def run(playwright):
 
         # ── 4. FILTROS ────────────────────────────────────
         print("\n[4] Aplicando filtros...")
+        # Em modo lote por IDs, aplicamos filtros gerais sem "ID da Questão"
         for nome_filtro, valores in FILTROS.items():
+            if nome_filtro == "ID da Questão" and IDS_QUESTOES_ALVO:
+                continue
             if not valores:
                 continue
             aplicar_filtro(ap, nome_filtro, valores)
 
         print("  Clicando em Aplicar filtros...")
-        ap.locator("button:has-text('Aplicar filtros')").click(timeout=8000)
+        clicar_aplicar_filtros(ap)
         time.sleep(espera(1.2))
 
-        # ── 5. EXTRAÇÃO COM PAGINAÇÃO ─────────────────────
+        # ── 5A. EXTRAÇÃO POR LOTE DE IDs (mesma sessão) ──
+        if IDS_QUESTOES_ALVO:
+            print(f"\n[5] Extraindo por IDs em lote: {len(IDS_QUESTOES_ALVO)} IDs")
+            for idx_id, id_alvo in enumerate(IDS_QUESTOES_ALVO, start=1):
+                print(f"\n[ID {idx_id}/{len(IDS_QUESTOES_ALVO)}] {id_alvo}")
+                limpar_estado_ui(ap)
+                aplicar_filtro(ap, "ID da Questão", [id_alvo])
+                print("  Clicando em Aplicar filtros...")
+                clicar_aplicar_filtros(ap)
+                # Espera progressiva para o card filtrar/renderizar (evita race no 2º+ ID)
+                try:
+                    ap.wait_for_selector('[class*="cardQuestao"]', timeout=12000)
+                except Exception:
+                    pass
+                time.sleep(espera(1.2) + 0.6)
+
+                try:
+                    ap.wait_for_selector('[class*="cardQuestao"]', timeout=15000)
+                except Exception:
+                    print("  Sem card para este ID.")
+                    time.sleep(1.0)
+                    continue
+
+                cards = ap.locator('[class*="cardQuestao"]')
+                n = cards.count()
+                if n == 0:
+                    print("  Sem card para este ID.")
+                    time.sleep(1.0)
+                    continue
+
+                # Normalmente retorna 1 card, mas processa todos por segurança
+                for i in range(n):
+                    card = cards.nth(i)
+                    try:
+                        card.scroll_into_view_if_needed(timeout=5000)
+                        time.sleep(espera(0.25))
+                    except Exception:
+                        pass
+                    qid = ""
+                    try:
+                        qid = card.evaluate(
+                            'el => { const s = el.querySelector(\'[class*="_id"] span, [class*="id__"] span\'); return s ? s.innerText.trim() : ""; }',
+                        )
+                        if not qid:
+                            continue
+
+                        materia_card = card.evaluate(
+                            """el => {
+                                const subEl = el.querySelector('[class*="_subheader"], [class*="subheader__"]');
+                                if (!subEl) return '';
+                                const spans = Array.from(subEl.querySelectorAll('span')).map(s => (s.innerText || '').trim()).filter(Boolean);
+                                if (spans.length === 0) return '';
+                                const difs = new Set(['fácil','facil','médio','medio','difícil','dificil']);
+                                for (const t of spans) {
+                                    if (!difs.has((t || '').toLowerCase())) return t;
+                                }
+                                return '';
+                            }"""
+                        )
+                        chave_card = f"{qid}__{(materia_card or '').strip().upper()}" if UNICO_POR_ID_E_MATERIA else qid
+                        if chave_card in ids_salvos:
+                            sufixo = f" ({materia_card})" if materia_card else ""
+                            print(f"  - #{qid}{sufixo} já salva, pulando.")
+                            continue
+
+                        print(f"  - Extraindo #{qid}...")
+                        q = extrair_card(card, ap)
+                        if not q.get("id"):
+                            q["id"] = qid
+                        if not q.get("bncc"):
+                            q["bncc"] = []
+                        mats_bncc = sorted({(b.get("materia") or "").strip() for b in q["bncc"] if (b.get("materia") or "").strip()})
+                        mats = sorted({m for m in (q.get("materias") or []) if m} | set(mats_bncc))
+                        q["materias"] = mats if mats else ([q.get("materia")] if q.get("materia") else [])
+                        if not q.get("materia") and q["materias"]:
+                            q["materia"] = q["materias"][0]
+
+                        questoes.append(q)
+                        salvar(questoes)
+                        ids_salvos.add(_chave_questao(q))
+                    except Exception as e:
+                        print(f"  - erro no card {i+1}: {e}")
+
+                # pequena pausa e segue para o próximo ID no mesmo contexto
+                time.sleep(1.0)
+                # Em alguns cenários o BNCC/resolução do 2º+ ID fica "preso" no estado da UI.
+                # Recarregar a página mantém sessão e estabiliza o próximo ciclo.
+                if RELOAD_ENTRE_IDS and idx_id < len(IDS_QUESTOES_ALVO):
+                    try:
+                        ap.goto(ATIVIDADE_URL, wait_until="domcontentloaded", timeout=30000)
+                        ap.wait_for_selector("button:has-text('Aplicar filtros'), [class*='cardQuestao']", timeout=15000)
+                        time.sleep(1.2)
+                    except Exception:
+                        pass
+
+            apagar_checkpoint()
+            print(f"\n[LOTE IDs] Concluído. Total no arquivo: {len(questoes)}")
+            print("\n" + "=" * 50)
+            print(f"  CONCLUÍDO! {len(questoes)} questões em '{SAIDA}'")
+            print("=" * 50)
+            return
+
+        # ── 5B. EXTRAÇÃO COM PAGINAÇÃO ────────────────────
         limite = PAGINAS_LIMITE  # None = sem limite
         meta_q = MAX_QUESTOES
         print(
